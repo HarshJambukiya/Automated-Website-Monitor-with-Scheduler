@@ -4,39 +4,44 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import re
-from datetime import datetime
+from datetime import datetime, time
+import schedule
+import time as time_module
+import logging
+import os
 
 # 📧 EMAIL CONFIGURATION
-SENDER_EMAIL = "tvaalioth26@gmail.com"
-SENDER_PASSWORD = "afyt pegw jzcg qyho"
-RECIPIENT_EMAIL = "tvaalioth26@gmail.com"
+SENDER_EMAIL = os.getenv('GMAIL_USER', 'tvaalioth26@gmail.com')
+SENDER_PASSWORD = os.getenv('GMAIL_APP_PASSWORD', 'afyt pegw jzcg qyho')
+RECIPIENT_EMAIL = os.getenv('NOTIFY_EMAIL', 'tvaalioth26@gmail.com')
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
-# 🎯 WEBSITE CONFIGURATION - CHANGE THIS!
+# ⏰ SCHEDULE CONFIGURATION
+SCHEDULE_CONFIG = {
+    "start_time": "10:00",  # Start checking from 10 AM
+    "end_time": "18:00",  # Stop checking at 6 PM
+    "check_interval": 2,  # Check every 2 hours
+    "timezone_offset": "+05:30"  # IST timezone (adjust if needed)
+}
+
+# 🎯 WEBSITE CONFIGURATION
 WEBSITE_CONFIG = {
-    # Option 1: Medical Admission Site
     "medical": {
         "url": "https://www.medadmgujarat.org/ga/home.aspx",
         "name": "Medical Admission Gujarat",
         "scraper_type": "medical"
     },
-
-    # Option 2: Hacker News
     "hackernews": {
-        "url": "https://news.ycombinator.com/newest",
+        "url": "https://news.ycombinator.com",
         "name": "Hacker News",
         "scraper_type": "hackernews"
     },
-
-    # Option 3: BBC News
     "bbc": {
         "url": "https://www.bbc.com/news",
         "name": "BBC News",
         "scraper_type": "bbc"
     },
-
-    # Option 4: Reddit
     "reddit": {
         "url": "https://old.reddit.com/r/all",
         "name": "Reddit",
@@ -44,8 +49,29 @@ WEBSITE_CONFIG = {
     }
 }
 
-# 🔧 CHANGE THIS TO SWITCH WEBSITES!
-CURRENT_SITE = "hackernews"  # Change to: "medical", "hackernews", "bbc", "reddit"
+# 🔧 DYNAMIC SITE SELECTION - Change via Environment Variable!
+CURRENT_SITE = os.getenv('MONITOR_SITE', 'medical')  # Default to medical, change via Railway Variables!
+
+# 📝 Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('monitor.log'),
+        logging.StreamHandler()
+    ]
+)
+
+
+def is_within_schedule():
+    """Check if current time is within scheduled hours"""
+    now = datetime.now()
+    current_time = now.time()
+
+    start_time = time.fromisoformat(SCHEDULE_CONFIG["start_time"])
+    end_time = time.fromisoformat(SCHEDULE_CONFIG["end_time"])
+
+    return start_time <= current_time <= end_time
 
 
 def send_email_notification(subject, body, update_text, site_name, site_url):
@@ -69,11 +95,19 @@ def send_email_notification(subject, body, update_text, site_name, site_url):
                 <div style="background-color: #fff3cd; padding: 10px; border-radius: 5px; margin: 10px 0;">
                     <p><strong>Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
                     <p><strong>Source:</strong> <a href="{site_url}">{site_name}</a></p>
+                    <p><strong>Monitoring:</strong> {CURRENT_SITE.upper()}</p>
+                </div>
+
+                <div style="background-color: #e8f5e8; padding: 10px; border-radius: 5px; margin: 10px 0;">
+                    <p><strong>📅 Schedule:</strong> Daily {SCHEDULE_CONFIG['start_time']} - {SCHEDULE_CONFIG['end_time']}</p>
+                    <p><strong>🔄 Interval:</strong> Every {SCHEDULE_CONFIG['check_interval']} hours</p>
+                    <p><strong>🎯 Current Site:</strong> {site_name}</p>
                 </div>
 
                 <p style="color: #666; font-size: 12px;">
                     This is an automated notification from your Website Monitor.<br>
-                    Please check the official website for complete details.
+                    <strong>To change monitored site:</strong> Update MONITOR_SITE environment variable in Railway<br>
+                    <strong>Options:</strong> medical, hackernews, bbc, reddit
                 </p>
             </body>
         </html>
@@ -87,11 +121,11 @@ def send_email_notification(subject, body, update_text, site_name, site_url):
         server.send_message(msg)
         server.quit()
 
-        print("✅ Email notification sent successfully!")
+        logging.info("✅ Email notification sent successfully!")
         return True
 
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        logging.error(f"❌ Failed to send email: {e}")
         return False
 
 
@@ -104,28 +138,24 @@ def scrape_medical_site(url):
 
         updates_found = []
 
-        # Look for divs containing "Updated On:" pattern
         all_divs = soup.find_all("div")
         for div in all_divs:
             text = div.get_text(strip=True)
             if "Updated On:" in text and len(text) > 20:
                 updates_found.append(text)
 
-        # Check marquee tags
         marquees = soup.find_all("marquee")
         for marquee in marquees:
             text = marquee.get_text(strip=True)
             if text and len(text) > 20:
                 updates_found.append(text)
 
-        # Look for update containers
         update_containers = soup.find_all(["div", "td", "span"], class_=re.compile(r"update|notice|news", re.I))
         for container in update_containers:
             text = container.get_text(strip=True)
             if text and len(text) > 20:
                 updates_found.append(text)
 
-        # Remove duplicates and filter relevant updates
         updates_found = list(dict.fromkeys(updates_found))
 
         relevant_updates = []
@@ -142,7 +172,7 @@ def scrape_medical_site(url):
             return "No updates found on the page"
 
     except Exception as e:
-        print(f"Error scraping medical site: {e}")
+        logging.error(f"Error scraping medical site: {e}")
         return None
 
 
@@ -153,7 +183,6 @@ def scrape_hackernews(url):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "lxml")
 
-        # Get the top story title
         top_story = soup.find("span", class_="titleline")
         if top_story:
             title_link = top_story.find("a")
@@ -163,7 +192,7 @@ def scrape_hackernews(url):
         return "No top story found"
 
     except Exception as e:
-        print(f"Error scraping Hacker News: {e}")
+        logging.error(f"Error scraping Hacker News: {e}")
         return None
 
 
@@ -174,7 +203,6 @@ def scrape_bbc_news(url):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "lxml")
 
-        # Look for main headline
         headline = soup.find("h2", {"data-testid": "card-headline"})
         if not headline:
             headline = soup.find("h2") or soup.find("h1")
@@ -185,7 +213,7 @@ def scrape_bbc_news(url):
         return "No headline found"
 
     except Exception as e:
-        print(f"Error scraping BBC News: {e}")
+        logging.error(f"Error scraping BBC News: {e}")
         return None
 
 
@@ -197,7 +225,6 @@ def scrape_reddit(url):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "lxml")
 
-        # Get the top post title
         top_post = soup.find("a", class_="title")
         if top_post:
             return top_post.get_text(strip=True)
@@ -205,7 +232,7 @@ def scrape_reddit(url):
         return "No top post found"
 
     except Exception as e:
-        print(f"Error scraping Reddit: {e}")
+        logging.error(f"Error scraping Reddit: {e}")
         return None
 
 
@@ -213,8 +240,6 @@ def scrape_website(config):
     """Main scraper function that routes to appropriate scraper"""
     url = config["url"]
     scraper_type = config["scraper_type"]
-
-    print(f"🔍 Scraping {config['name']}...")
 
     if scraper_type == "medical":
         latest_update = scrape_medical_site(url)
@@ -225,41 +250,44 @@ def scrape_website(config):
     elif scraper_type == "reddit":
         latest_update = scrape_reddit(url)
     else:
-        print(f"❌ Unknown scraper type: {scraper_type}")
+        logging.error(f"❌ Unknown scraper type: {scraper_type}")
         return None
 
     if latest_update:
-        # Clean up text
         latest_update = re.sub(r'\s+', ' ', latest_update).strip()
         return latest_update
 
     return None
 
 
-def main():
-    """Main function to check for updates and send notifications"""
+def check_for_updates():
+    """Main function to check for updates - called by scheduler"""
 
-    # Get current website config
+    # Check if we're within scheduled hours
+    if not is_within_schedule():
+        current_time = datetime.now().strftime('%H:%M')
+        logging.info(f"⏰ Outside schedule hours ({current_time}). Skipping check.")
+        return
+
+    # Validate current site
     if CURRENT_SITE not in WEBSITE_CONFIG:
-        print(f"❌ Unknown site: {CURRENT_SITE}")
-        print(f"Available sites: {list(WEBSITE_CONFIG.keys())}")
+        logging.error(f"❌ Invalid MONITOR_SITE: {CURRENT_SITE}")
+        logging.info(f"Valid options: {list(WEBSITE_CONFIG.keys())}")
         return
 
     config = WEBSITE_CONFIG[CURRENT_SITE]
     site_name = config["name"]
 
-    print(f"🔍 Checking {site_name} for updates... [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+    logging.info(f"🔍 Scheduled check: {site_name} [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
 
-    # Scrape for updates
     latest_update = scrape_website(config)
 
     if not latest_update:
-        print("❌ Could not fetch updates from website")
+        logging.error("❌ Could not fetch updates from website")
         return
 
-    print("Latest Update Found:", latest_update[:100] + "..." if len(latest_update) > 100 else latest_update)
+    logging.info(f"Latest Update Found: {latest_update[:100]}{'...' if len(latest_update) > 100 else ''}")
 
-    # Check against previous update
     filename = f"last_update_{CURRENT_SITE}.txt"
 
     try:
@@ -267,36 +295,79 @@ def main():
             last_seen = f.read().strip()
 
         if latest_update != last_seen:
-            print("🚨 NEW UPDATE DETECTED!")
+            logging.info("🚨 NEW UPDATE DETECTED!")
 
-            # Send email notification
             subject = f"🚨 New Update from {site_name}!"
             body = f"New update detected at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
             email_sent = send_email_notification(subject, body, latest_update, site_name, config["url"])
 
             if email_sent:
-                # Save new update only if email was sent successfully
                 with open(filename, "w", encoding='utf-8') as f:
                     f.write(latest_update)
-                print("📝 Update saved to file")
+                logging.info("📝 Update saved to file")
             else:
-                print("⚠️  Update not saved due to email failure")
+                logging.warning("⚠️  Update not saved due to email failure")
 
         else:
-            print("✅ No new updates since last check")
+            logging.info("✅ No new updates since last check")
 
     except FileNotFoundError:
-        # First run
         with open(filename, "w", encoding='utf-8') as f:
             f.write(latest_update)
-        print("📝 First run - baseline saved")
+        logging.info("📝 First run - baseline saved")
 
-        # Send initial notification
         subject = f"📋 {site_name} Monitor Started"
         body = f"Your {site_name} monitor is now active!"
         send_email_notification(subject, body, f"Current status: {latest_update}", site_name, config["url"])
 
 
+def run_scheduler():
+    """Set up and run the scheduler"""
+
+    # Log startup info
+    logging.info("🚀 Website Monitor with Dynamic Site Selection Started!")
+    logging.info(f"🎯 Current Site: {CURRENT_SITE.upper()}")
+
+    if CURRENT_SITE in WEBSITE_CONFIG:
+        logging.info(f"📍 Monitoring: {WEBSITE_CONFIG[CURRENT_SITE]['name']}")
+        logging.info(f"🌐 URL: {WEBSITE_CONFIG[CURRENT_SITE]['url']}")
+    else:
+        logging.error(f"❌ Invalid site: {CURRENT_SITE}")
+        logging.info(f"✅ Valid options: {list(WEBSITE_CONFIG.keys())}")
+        logging.info("💡 Set MONITOR_SITE environment variable to change site")
+        return
+
+    logging.info("💡 To change site: Update MONITOR_SITE environment variable in Railway")
+    logging.info(f"📋 Available sites: {', '.join(WEBSITE_CONFIG.keys())}")
+
+    # Schedule checks every 2 hours during business hours
+    schedule.every(SCHEDULE_CONFIG['check_interval']).hours.do(check_for_updates)
+
+    # Also run immediately when script starts (if within hours)
+    if is_within_schedule():
+        logging.info("🚀 Starting immediate check...")
+        check_for_updates()
+    else:
+        logging.info(f"⏰ Outside schedule hours. Next check at {SCHEDULE_CONFIG['start_time']}.")
+
+    logging.info(
+        f"📅 Monitor scheduled: {SCHEDULE_CONFIG['start_time']} - {SCHEDULE_CONFIG['end_time']} every {SCHEDULE_CONFIG['check_interval']} hours")
+
+    while True:
+        schedule.run_pending()
+        time_module.sleep(60)  # Check every minute for scheduled tasks
+
+
+def main():
+    """Main function"""
+    run_scheduler()
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logging.info("🛑 Monitor stopped by user")
+    except Exception as e:
+        logging.error(f"❌ Monitor error: {e}")
